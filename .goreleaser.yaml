@@ -1,0 +1,50 @@
+project_name: term-paper
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: term-paper
+    main: ./cmd/term-paper
+    binary: term-paper
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ .Version }}-next"
+
+brews:
+  - name: term-paper
+    repository:
+      owner: vasyukov1
+      name: homebrew-hse-coursework-docs
+    homepage: https://github.com/vasyukov1/hse-coursework-docs
+    description: Typst-based coursework documentation generator and PDF builder
+    license: MIT
+    directory: Formula
+    dependencies:
+      - name: typst
+    test: |
+      system "#{bin}/term-paper", "init", "--output", testpath/"demo"
+      system "#{bin}/term-paper", "generate", "--output", testpath/"demo", "--doc", "tz", "--skip-ai"
+      assert_path_exists testpath/"demo"/"term-paper.yaml"
+      cd testpath/"demo" do
+        system "#{bin}/term-paper", "doctor"
+      end

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-smoke:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Typst
+        run: brew install typst
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build CLI
+        run: go build -o ./term-paper ./cmd/term-paper
+
+      - name: Smoke test project flow
+        run: |
+          rm -rf /tmp/term-paper-smoke
+          ./term-paper init --output /tmp/term-paper-smoke --mode team
+          ./term-paper generate --output /tmp/term-paper-smoke --skip-ai
+          cd /tmp/term-paper-smoke
+          "$GITHUB_WORKSPACE/term-paper" doctor
+          "$GITHUB_WORKSPACE/term-paper" create-pdf
+          test -f build/tz.pdf
+          test -f build/pz.pdf
+
+      - name: Homebrew install smoke test
+        env:
+          HOMEBREW_NO_INSTALL_FROM_API: 1
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          tar -czf /tmp/term-paper.tgz .
+          SHA="$(shasum -a 256 /tmp/term-paper.tgz | awk '{print $1}')"
+          cat >/tmp/term-paper.rb <<EOF
+          class TermPaper < Formula
+            desc "Typst-based coursework documentation generator and PDF builder"
+            homepage "https://github.com/${{ github.repository }}"
+            url "file:///tmp/term-paper.tgz"
+            sha256 "${SHA}"
+            license "MIT"
+
+            depends_on "go" => :build
+            depends_on "typst"
+
+            def install
+              system "go", "build", *std_go_args(ldflags: "-s -w"), "./cmd/term-paper"
+            end
+
+            test do
+              system "#{bin}/term-paper", "init", "--output", testpath/"demo"
+              system "#{bin}/term-paper", "generate", "--output", testpath/"demo", "--doc", "tz", "--skip-ai"
+              assert_path_exists testpath/"demo"/"term-paper.yaml"
+            end
+          end
+          EOF
+          brew install --build-from-source /tmp/term-paper.rb
+          brew test term-paper
