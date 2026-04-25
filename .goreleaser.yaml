@@ -1,3 +1,5 @@
+version: 2
+
 project_name: term-paper
 
 before:
@@ -35,6 +37,7 @@ brews:
     repository:
       owner: vasyukov1
       name: homebrew-hse-coursework-docs
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/vasyukov1/hse-coursework-docs
     description: Typst-based coursework documentation generator and PDF builder
     license: MIT
