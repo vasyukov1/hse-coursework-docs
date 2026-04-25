@@ -43,7 +43,12 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           tar -czf /tmp/term-paper.tgz .
           SHA="$(shasum -a 256 /tmp/term-paper.tgz | awk '{print $1}')"
-          cat >/tmp/term-paper.rb <<EOF
+
+          brew tap-new local/term-paper
+
+          FORMULA_DIR="$(brew --repository local/term-paper)/Formula"
+
+          cat >"$FORMULA_DIR/term-paper.rb" <<EOF
           class TermPaper < Formula
             desc "Typst-based coursework documentation generator and PDF builder"
             homepage "https://github.com/${{ github.repository }}"
@@ -65,5 +70,6 @@ jobs:
             end
           end
           EOF
-          brew install --build-from-source /tmp/term-paper.rb
-          brew test term-paper
+
+          brew install --build-from-source local/term-paper/term-paper
+          brew test local/term-paper/term-paper
