@@ -1,5 +1,3 @@
-version: 2
-
 project_name: term-paper
 
 before:
@@ -46,7 +44,7 @@ brews:
       - name: typst
     test: |
       system "#{bin}/term-paper", "init", "--output", testpath/"demo"
-      system "#{bin}/term-paper", "generate", "--output", testpath/"demo", "--doc", "tz", "--skip-ai"
+      system "#{bin}/term-paper", "generate-doc", "--output", testpath/"demo", "--doc", "pz", "--skip-ai"
       assert_path_exists testpath/"demo"/"term-paper.yaml"
       cd testpath/"demo" do
         system "#{bin}/term-paper", "doctor"

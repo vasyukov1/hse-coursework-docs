@@ -10,19 +10,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vasyukov1/term-paper/internal/config"
+	"github.com/vasyukov1/hse-coursework-docs/internal/config"
 )
 
-func TestGenerateSubset(t *testing.T) {
+func TestGenerateDocSubset(t *testing.T) {
 	root := t.TempDir()
-	initProject(t, root, "single")
+	initProject(t, root)
 
-	if err := Generate(GenerateOptions{
+	if err := GenerateDoc(GenerateDocOptions{
 		Doc:    "pmi",
 		Output: root,
 		SkipAI: true,
 	}); err != nil {
-		t.Fatalf("Generate() error = %v", err)
+		t.Fatalf("GenerateDoc() error = %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(root, "docs", "pmi", "main.typ")); err != nil {
@@ -31,89 +31,21 @@ func TestGenerateSubset(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "docs", "tz")); !os.IsNotExist(err) {
 		t.Fatalf("expected tz doc to be absent, got err=%v", err)
 	}
-
-	cfg, err := config.Load(root)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !cfg.Docs["pmi"].Enabled {
-		t.Fatalf("expected pmi to be enabled")
-	}
-	if cfg.Docs["pmi-team"].Enabled {
-		t.Fatalf("expected pmi-team to stay disabled in single mode")
-	}
 }
 
-func TestGenerateTeamProjectEnablesTeamPMI(t *testing.T) {
+func TestGenerateDocWritesDraftFiles(t *testing.T) {
 	root := t.TempDir()
-	initProject(t, root, "team")
+	initProject(t, root)
 
-	if err := Generate(GenerateOptions{
-		Doc:    "all",
+	if err := GenerateDoc(GenerateDocOptions{
+		Doc:    "pz",
 		Output: root,
 		SkipAI: true,
 	}); err != nil {
-		t.Fatalf("Generate() error = %v", err)
+		t.Fatalf("GenerateDoc() error = %v", err)
 	}
 
-	cfg, err := config.Load(root)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if len(cfg.Participants) < 2 {
-		t.Fatalf("expected team mode to create multiple participants")
-	}
-	if !cfg.Docs["pmi-team"].Enabled {
-		t.Fatalf("expected pmi-team to be enabled")
-	}
-}
-
-func TestDoctorAndCreatePDF(t *testing.T) {
-	root := t.TempDir()
-	initProject(t, root, "single")
-	if err := Generate(GenerateOptions{
-		Doc:    "all",
-		Output: root,
-		SkipAI: true,
-	}); err != nil {
-		t.Fatalf("Generate() error = %v", err)
-	}
-
-	if _, err := execLookPath("typst"); err != nil {
-		t.Skip("typst is not installed")
-	}
-
-	restore := chdir(t, root)
-	defer restore()
-
-	if _, err := Doctor(); err != nil {
-		t.Fatalf("Doctor() error = %v", err)
-	}
-
-	if err := CreatePDF(CreatePDFOptions{
-		Doc:    "tz",
-		Output: "build",
-	}); err != nil {
-		t.Fatalf("CreatePDF() error = %v", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(root, "build", "tz.pdf")); err != nil {
-		t.Fatalf("expected tz.pdf: %v", err)
-	}
-}
-
-func TestAIDraftWritesDraftFiles(t *testing.T) {
-	root := t.TempDir()
-	initProject(t, root, "single")
-	if err := Generate(GenerateOptions{
-		Doc:    "all",
-		Output: root,
-		SkipAI: true,
-	}); err != nil {
-		t.Fatalf("Generate() error = %v", err)
-	}
-
-	projectDir := filepath.Join(root, "sample-project")
+	projectDir := filepath.Join(root, "input", "code", "sample-project")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +63,7 @@ func TestAIDraftWritesDraftFiles(t *testing.T) {
 				{
 					"message": map[string]any{
 						"role":    "assistant",
-						"content": "= Сгенерированная секция\n\nTODO: Уточните детали проекта.\n",
+						"content": "== Сгенерированный текст\n\nTODO: Уточнить детали проекта.\n",
 					},
 				},
 			},
@@ -140,40 +72,139 @@ func TestAIDraftWritesDraftFiles(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	t.Setenv("OPENROUTER_BASE_URL", server.URL)
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.AI.APIKey = "test-key"
+	cfg.AI.Provider = "openrouter"
+	cfg.AI.BaseURL = server.URL
+	cfg.AI.StyleExamples = map[string][]string{}
+	if err := config.Save(root, cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
 
 	restore := chdir(t, root)
 	defer restore()
 
-	originalSection, err := os.ReadFile(filepath.Join(root, "docs", "pz", "sections", "01-overview.typ"))
+	originalSection, err := os.ReadFile(filepath.Join(root, "docs", "pz", "sections", "02-requirements.typ"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := AIDraft(AIDraftOptions{
-		FromDoc:     "tz",
-		Doc:         "pz",
-		ProjectPath: projectDir,
-		Model:       "test/model",
+	if err := GenerateDoc(GenerateDocOptions{
+		Doc:    "pz",
+		Output: root,
 	}); err != nil {
-		t.Fatalf("AIDraft() error = %v", err)
+		t.Fatalf("GenerateDoc() error = %v", err)
 	}
 
-	draft, err := os.ReadFile(filepath.Join(root, "docs", "pz", "drafts", "01-overview.typ"))
+	draft, err := os.ReadFile(filepath.Join(root, "docs", "pz", "drafts", "02-requirements.typ"))
 	if err != nil {
 		t.Fatalf("expected generated draft: %v", err)
 	}
-	if !strings.Contains(string(draft), "Сгенерированная секция") {
+	if !strings.Contains(string(draft), "Сгенерированный текст") {
 		t.Fatalf("unexpected draft content: %s", string(draft))
 	}
 
-	currentSection, err := os.ReadFile(filepath.Join(root, "docs", "pz", "sections", "01-overview.typ"))
+	currentSection, err := os.ReadFile(filepath.Join(root, "docs", "pz", "sections", "02-requirements.typ"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(currentSection) != string(originalSection) {
 		t.Fatalf("expected working section file to stay unchanged without --apply")
+	}
+}
+
+func TestImproveDocWritesImprovedCopy(t *testing.T) {
+	root := t.TempDir()
+	initProject(t, root)
+	if err := GenerateDoc(GenerateDocOptions{
+		Doc:    "ro",
+		Output: root,
+		SkipAI: true,
+	}); err != nil {
+		t.Fatalf("GenerateDoc() error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "= ВЫПОЛНЕНИЕ ПРОГРАММЫ\n\n#h(2em) Уточненный текст.\n",
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.AI.APIKey = "test-key"
+	cfg.AI.Provider = "openrouter"
+	cfg.AI.BaseURL = server.URL
+	cfg.AI.StyleExamples = map[string][]string{}
+	if err := config.Save(root, cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	restore := chdir(t, root)
+	defer restore()
+
+	if err := ImproveDoc(ImproveDocOptions{
+		File:   "docs/ro/sections/03-run.typ",
+		Prompt: "сделай текст подробнее",
+	}); err != nil {
+		t.Fatalf("ImproveDoc() error = %v", err)
+	}
+
+	improvedPath := filepath.Join(root, "docs", "ro", "sections", "03-run.typ.improved.typ")
+	data, err := os.ReadFile(improvedPath)
+	if err != nil {
+		t.Fatalf("expected improved file: %v", err)
+	}
+	if !strings.Contains(string(data), "Уточненный текст") {
+		t.Fatalf("unexpected improved content: %s", string(data))
+	}
+}
+
+func TestDoctorAndCreatePDF(t *testing.T) {
+	root := t.TempDir()
+	initProject(t, root)
+	if err := GenerateDoc(GenerateDocOptions{
+		Doc:    "pmi",
+		Output: root,
+		SkipAI: true,
+	}); err != nil {
+		t.Fatalf("GenerateDoc() error = %v", err)
+	}
+
+	if _, err := execLookPath("typst"); err != nil {
+		t.Skip("typst is not installed")
+	}
+
+	restore := chdir(t, root)
+	defer restore()
+
+	if _, err := Doctor(); err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+
+	if err := CreatePDF(CreatePDFOptions{
+		Doc:    "all",
+		Output: "build",
+	}); err != nil {
+		t.Fatalf("CreatePDF() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "build", "pmi.pdf")); err != nil {
+		t.Fatalf("expected pmi.pdf: %v", err)
 	}
 }
 
@@ -231,10 +262,9 @@ func TestBundleTypst(t *testing.T) {
 	}
 }
 
-func initProject(t *testing.T, root, mode string) {
+func initProject(t *testing.T, root string) {
 	t.Helper()
 	if err := Init(InitOptions{
-		Mode:   mode,
 		Output: root,
 	}); err != nil {
 		t.Fatalf("Init() error = %v", err)
@@ -248,9 +278,11 @@ func initProject(t *testing.T, root, mode string) {
 	cfg.AI.Provider = "openrouter"
 	cfg.AI.BaseURL = "https://example.invalid"
 	cfg.AI.StyleExamples = map[string][]string{}
-	cfg.Sources.TZPath = "./input/tz/main.typ"
-	cfg.Sources.TeamTZPath = "./input/tz-team/main.typ"
-	cfg.Sources.CodePaths = []string{}
+	cfg.Sources.TZDir = "./input/tz"
+	cfg.Sources.TeamTZDir = "./input/tz-team"
+	cfg.Sources.CodeDir = "./input/code"
+	cfg.Sources.NotesFile = "./input/notes.txt"
+	cfg.Sources.SourcePriority = "balanced"
 	if err := config.Save(root, cfg); err != nil {
 		t.Fatalf("Save() after init error = %v", err)
 	}
@@ -259,6 +291,9 @@ func initProject(t *testing.T, root, mode string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "input", "tz-team", "main.typ"), []byte("= Командное ТЗ\n\nТекст командного ТЗ.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "input", "notes.txt"), []byte("TODO: вставить скрин главного экрана.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

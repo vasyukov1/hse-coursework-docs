@@ -28,12 +28,11 @@ jobs:
       - name: Smoke test project flow
         run: |
           rm -rf /tmp/term-paper-smoke
-          ./term-paper init --output /tmp/term-paper-smoke --mode team
-          ./term-paper generate --output /tmp/term-paper-smoke --skip-ai
+          ./term-paper init --output /tmp/term-paper-smoke
+          ./term-paper generate-doc --output /tmp/term-paper-smoke --doc pz --skip-ai
           cd /tmp/term-paper-smoke
           "$GITHUB_WORKSPACE/term-paper" doctor
           "$GITHUB_WORKSPACE/term-paper" create-pdf
-          test -f build/tz.pdf
           test -f build/pz.pdf
 
       - name: Homebrew install smoke test
@@ -41,21 +40,14 @@ jobs:
           HOMEBREW_NO_INSTALL_FROM_API: 1
         run: |
           cd "$GITHUB_WORKSPACE"
-
-          tar -czf /tmp/term-paper-0.1.1.tgz .
-          SHA="$(shasum -a 256 /tmp/term-paper-0.1.1.tgz | awk '{print $1}')"
-
-          brew tap-new local/term-paper
-
-          FORMULA_DIR="$(brew --repository local/term-paper)/Formula"
-
-          cat >"$FORMULA_DIR/term-paper.rb" <<EOF
+          tar -czf /tmp/term-paper.tgz .
+          SHA="$(shasum -a 256 /tmp/term-paper.tgz | awk '{print $1}')"
+          cat >/tmp/term-paper.rb <<EOF
           class TermPaper < Formula
             desc "Typst-based coursework documentation generator and PDF builder"
             homepage "https://github.com/${{ github.repository }}"
-            url "file:///tmp/term-paper-0.1.1.tgz"
+            url "file:///tmp/term-paper.tgz"
             sha256 "${SHA}"
-            version "0.1.1"
             license "MIT"
 
             depends_on "go" => :build
@@ -67,11 +59,10 @@ jobs:
 
             test do
               system "#{bin}/term-paper", "init", "--output", testpath/"demo"
-              system "#{bin}/term-paper", "generate", "--output", testpath/"demo", "--doc", "tz", "--skip-ai"
+              system "#{bin}/term-paper", "generate-doc", "--output", testpath/"demo", "--doc", "pz", "--skip-ai"
               assert_path_exists testpath/"demo"/"term-paper.yaml"
             end
           end
           EOF
-
-          brew install --build-from-source local/term-paper/term-paper
-          brew test local/term-paper/term-paper
+          brew install --build-from-source /tmp/term-paper.rb
+          brew test term-paper

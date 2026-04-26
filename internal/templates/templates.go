@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vasyukov1/term-paper/internal/config"
-	"github.com/vasyukov1/term-paper/internal/documents"
+	"github.com/vasyukov1/hse-coursework-docs/internal/config"
+	"github.com/vasyukov1/hse-coursework-docs/internal/documents"
 )
 
 //go:embed all:assets/project/**
@@ -54,6 +54,9 @@ func copyDir(src, dst string) error {
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
+		if _, err := os.Stat(target); err == nil {
+			return nil
+		}
 		data, err := projectFS.ReadFile(path)
 		if err != nil {
 			return err
@@ -66,18 +69,26 @@ func writeRootFiles(root string) error {
 	readme := strings.TrimSpace(`
 # term-paper project
 
-1. Fill in ` + "`term-paper.yaml`" + `.
-2. Put the main ` + "`ТЗ`" + ` into the path from ` + "`sources.tz_path`" + `.
-3. If you have a team ` + "`ТЗ`" + `, put it into the path from ` + "`sources.team_tz_path`" + `.
-4. Put one or more code archives or repository folders into the paths listed in ` + "`sources.code_paths`" + `.
-5. Add ` + "`ai.api_key`" + ` or set the environment variable from ` + "`ai.api_key_env`" + `.
-6. Run ` + "`term-paper generate`" + ` to scaffold documents and generate AI drafts.
-7. Edit generated drafts in ` + "`docs/<doc-id>/drafts`" + `, move the final text into ` + "`sections/`" + `, then run ` + "`term-paper create-pdf`" + `.
+1. Заполните ` + "`term-paper.yaml`" + `.
+2. Положите основное ТЗ в ` + "`input/tz`" + `.
+3. Если нужен командный ПМИ, положите командное ТЗ в ` + "`input/tz-team`" + `.
+4. Положите архивы кода или каталоги репозиториев в ` + "`input/code`" + `.
+5. Допишите заметки в ` + "`input/notes.txt`" + `.
+6. Запустите ` + "`term-paper generate-doc --doc pz`" + ` или другую нужную команду.
+7. Проверьте ` + "`docs/<doc>/drafts`" + ` или ` + "`docs/<doc>/sections`" + `.
+8. Соберите PDF командой ` + "`term-paper create-pdf --doc <doc>`" + `.
 `)
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte(readme+"\n"), 0o644); err != nil {
+	if err := writeIfMissing(filepath.Join(root, "README.md"), []byte(readme+"\n")); err != nil {
 		return err
 	}
 
 	gitignore := "build/\n.docs-cache/\n"
-	return os.WriteFile(filepath.Join(root, ".gitignore"), []byte(gitignore), 0o644)
+	return writeIfMissing(filepath.Join(root, ".gitignore"), []byte(gitignore))
+}
+
+func writeIfMissing(path string, data []byte) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	return os.WriteFile(path, data, 0o644)
 }

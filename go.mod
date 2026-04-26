@@ -1,5 +1,5 @@
-module github.com/vasyukov1/term-paper
+module github.com/vasyukov1/hse-coursework-docs
 
-go 1.25.0
+go 1.22
 
 require gopkg.in/yaml.v3 v3.0.1

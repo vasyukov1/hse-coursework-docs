@@ -5,25 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
+	"sort"
 	"strings"
-	"time"
 
-	"github.com/vasyukov1/term-paper/internal/ai"
-	"github.com/vasyukov1/term-paper/internal/config"
-	"github.com/vasyukov1/term-paper/internal/documents"
-	"github.com/vasyukov1/term-paper/internal/templates"
-	"github.com/vasyukov1/term-paper/internal/typst"
+	"github.com/vasyukov1/hse-coursework-docs/internal/ai"
+	"github.com/vasyukov1/hse-coursework-docs/internal/config"
+	"github.com/vasyukov1/hse-coursework-docs/internal/documents"
+	"github.com/vasyukov1/hse-coursework-docs/internal/templates"
+	"github.com/vasyukov1/hse-coursework-docs/internal/typst"
 )
 
-type GenerateOptions struct {
-	Doc    string
-	Output string
-	SkipAI bool
-}
-
 type InitOptions struct {
-	Mode   string
 	Output string
 }
 
@@ -31,6 +23,19 @@ type BundleTypstOptions struct {
 	Input  string
 	Output string
 	Entry  string
+}
+
+type GenerateDocOptions struct {
+	Doc    string
+	Output string
+	Apply  bool
+	SkipAI bool
+}
+
+type ImproveDocOptions struct {
+	File   string
+	Prompt string
+	Apply  bool
 }
 
 type CreatePDFOptions struct {
@@ -43,45 +48,12 @@ type DoctorResult struct {
 	Messages []string
 }
 
-type AIDraftOptions struct {
-	FromDoc        string
-	Doc            string
-	Model          string
-	ProjectPath    string
-	ProjectArchive string
-	Apply          bool
-}
-
-func Generate(opts GenerateOptions) error {
-	projectRoot, cfg, err := loadProjectFromOutput(opts.Output)
-	if err != nil {
-		return err
-	}
-	if err := config.Validate(cfg); err != nil {
-		return err
-	}
-	selected, err := selectDocsForGeneration(cfg, opts.Doc)
-	if err != nil {
-		return err
-	}
-	if err := templates.WriteProject(projectRoot, cfg, selected); err != nil {
-		return err
-	}
-
-	if opts.SkipAI {
-		fmt.Println("Typst project structure updated. AI generation skipped by --skip-ai.")
-		return nil
-	}
-
-	return generateFromConfiguredSources(projectRoot, cfg, selected, "")
-}
-
 func Init(opts InitOptions) error {
-	selected, err := documents.ResolveSelection("all", opts.Mode)
+	selected, err := documents.ResolveSelection("all")
 	if err != nil {
 		return err
 	}
-	cfg := config.Default(opts.Mode, selected)
+	cfg := config.Default("single", selected)
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
@@ -90,25 +62,29 @@ func Init(opts InitOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(projectRoot, "input", "code"), 0o755); err != nil {
+	for _, path := range []string{
+		filepath.Join(projectRoot, "input", "code"),
+		filepath.Join(projectRoot, "input", "tz"),
+		filepath.Join(projectRoot, "input", "tz-team"),
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return err
+		}
+	}
+	if err := writeDefaultInputFile(filepath.Join(projectRoot, "input", "tz", "main.typ"), "= Техническое задание\n\nTODO: вставьте сюда основной текст ТЗ или замените файл своими Typst-секциями.\n"); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(projectRoot, "input", "tz"), 0o755); err != nil {
+	if err := writeDefaultInputFile(filepath.Join(projectRoot, "input", "tz-team", "main.typ"), "= Командное техническое задание\n\nTODO: используйте этот каталог только если нужен командный ПМИ.\n"); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(projectRoot, "input", "tz-team"), 0o755); err != nil {
-		return err
-	}
-	if err := writeDefaultInputFile(filepath.Join(projectRoot, "input", "tz", "main.typ"), "= Техническое задание\n\nTODO: вставьте сюда основной текст ТЗ или замените файл своим Typst-документом.\n"); err != nil {
-		return err
-	}
-	if err := writeDefaultInputFile(filepath.Join(projectRoot, "input", "tz-team", "main.typ"), "= Командное техническое задание\n\nTODO: если командного ТЗ нет, оставьте путь пустым в term-paper.yaml.\n"); err != nil {
+	if err := writeDefaultInputFile(filepath.Join(projectRoot, "input", "notes.txt"), "TODO: добавьте важные детали проекта, расхождения между ТЗ и кодом, а также TODO для скриншотов.\n"); err != nil {
 		return err
 	}
 	if err := config.Save(projectRoot, cfg); err != nil {
 		return err
 	}
 	fmt.Printf("Created %s\n", filepath.Join(projectRoot, config.FileName))
+	fmt.Printf("Prepared input directories in %s\n", filepath.Join(projectRoot, "input"))
 	return nil
 }
 
@@ -127,12 +103,108 @@ func BundleTypst(opts BundleTypstOptions) error {
 	return nil
 }
 
+func GenerateDoc(opts GenerateDocOptions) error {
+	projectRoot, cfg, err := loadProjectFromOutput(opts.Output)
+	if err != nil {
+		return err
+	}
+	if err := config.Validate(cfg); err != nil {
+		return err
+	}
+
+	selected, err := selectSingleDoc(opts.Doc)
+	if err != nil {
+		return err
+	}
+	if err := templates.WriteProject(projectRoot, cfg, selected); err != nil {
+		return err
+	}
+	if opts.SkipAI {
+		fmt.Printf("Prepared Typst skeleton for %s without AI generation\n", selected[0].ID)
+		return nil
+	}
+
+	return generateConfiguredDrafts(projectRoot, cfg, selected, cfg.AI.DefaultModel, opts.Apply)
+}
+
+func ImproveDoc(opts ImproveDocOptions) error {
+	projectRoot, cfg, err := loadProject()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(opts.File) == "" {
+		return fmt.Errorf("--file is required")
+	}
+	if strings.TrimSpace(opts.Prompt) == "" {
+		return fmt.Errorf("--prompt is required")
+	}
+
+	targetFile := resolveProjectPath(projectRoot, opts.File)
+	current, err := os.ReadFile(targetFile)
+	if err != nil {
+		return err
+	}
+
+	primaryTZ, err := loadPrimaryTZSource(projectRoot, cfg)
+	if err != nil {
+		return err
+	}
+	codeContext, err := collectCodeContext(projectRoot, cfg)
+	if err != nil {
+		return err
+	}
+	notesText, err := loadNotes(projectRoot, cfg)
+	if err != nil {
+		return err
+	}
+
+	client := ai.Client{
+		Provider: cfg.AI.Provider,
+		BaseURL:  providerBaseURLFromEnv(cfg),
+		APIKey:   configuredAPIKey(cfg),
+	}
+	if strings.TrimSpace(client.APIKey) == "" {
+		return fmt.Errorf("AI key is empty; fill ai.api_key in term-paper.yaml or set a provider env var")
+	}
+
+	fmt.Printf("Improving %s...\n", targetFile)
+	prompt := strings.Join([]string{
+		"Улучши существующий Typst-файл документации.",
+		"Верни только итоговый текст файла в формате Typst.",
+		"Не добавляй пояснений, markdown-обёрток, вводных слов и комментариев вне текста документа.",
+		"Сохрани официальный технический стиль, не выдумывай факты и не меняй базовую структуру без необходимости.",
+		"Запрос пользователя: " + opts.Prompt,
+		"\nТекущий текст файла:\n" + string(current),
+		"\nОсновное ТЗ:\n" + primaryTZ,
+		"\nКонтекст кода:\n" + projectContextOrStub(codeContext),
+		"\nЗаметки пользователя:\n" + notesText,
+	}, "\n\n")
+
+	out, err := client.Complete(context.Background(), cfg.AI.DefaultModel, []ai.Message{
+		{Role: "system", Content: "Верни только итоговый Typst-текст файла без пояснений."},
+		{Role: "user", Content: prompt},
+	})
+	if err != nil {
+		return err
+	}
+
+	writePath := targetFile + ".improved.typ"
+	if opts.Apply {
+		writePath = targetFile
+	}
+	if err := os.WriteFile(writePath, []byte(ensureTrailingNewline(strings.TrimSpace(out))), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("Improved file written to %s\n", writePath)
+	return nil
+}
+
 func CreatePDF(opts CreatePDFOptions) error {
 	projectRoot, cfg, err := loadProject()
 	if err != nil {
 		return err
 	}
-	docSpecs, err := resolveExistingDocs(cfg, opts.Doc)
+	docSpecs, err := resolveExistingDocs(projectRoot, cfg, opts.Doc)
 	if err != nil {
 		return err
 	}
@@ -147,10 +219,11 @@ func CreatePDF(opts CreatePDFOptions) error {
 
 	for _, spec := range docSpecs {
 		outputFile := filepath.Join(buildDir, spec.ID+".pdf")
+		fmt.Printf("Building PDF for %s...\n", spec.ID)
 		if opts.Watch {
-			return typst.Watch(projectRoot, typst.MainFile(spec.ID), outputFile)
+			return typst.Watch(projectRoot, typst.MainFile(spec.Folder), outputFile)
 		}
-		if err := typst.Compile(projectRoot, typst.MainFile(spec.ID), outputFile); err != nil {
+		if err := typst.Compile(projectRoot, typst.MainFile(spec.Folder), outputFile); err != nil {
 			return fmt.Errorf("compile %s: %w", spec.ID, err)
 		}
 		fmt.Printf("Built %s\n", outputFile)
@@ -163,10 +236,7 @@ func Doctor() (DoctorResult, error) {
 	if err != nil {
 		return DoctorResult{}, err
 	}
-
-	messages := []string{
-		fmt.Sprintf("Project root: %s", projectRoot),
-	}
+	messages := []string{fmt.Sprintf("Project root: %s", projectRoot)}
 
 	if err := typst.EnsureInstalled(); err != nil {
 		return DoctorResult{}, err
@@ -181,24 +251,17 @@ func Doctor() (DoctorResult, error) {
 	if err := ensurePath(filepath.Join(projectRoot, "shared", "typst", "core.typ")); err != nil {
 		return DoctorResult{}, err
 	}
-	if err := ensureOptionalPath(resolveProjectPath(projectRoot, cfg.Sources.TZPath), "sources.tz_path"); err != nil {
+	if err := ensureOptionalPath(resolveProjectPath(projectRoot, cfg.Sources.TZDir), "inputs.tz_dir"); err != nil {
 		return DoctorResult{}, err
 	}
-	if strings.TrimSpace(cfg.Sources.TeamTZPath) != "" {
-		if err := ensureOptionalPath(resolveProjectPath(projectRoot, cfg.Sources.TeamTZPath), "sources.team_tz_path"); err != nil {
-			return DoctorResult{}, err
-		}
+	if err := ensureOptionalPath(resolveProjectPath(projectRoot, cfg.Sources.CodeDir), "inputs.code_dir"); err != nil {
+		return DoctorResult{}, err
 	}
-	for i, rawPath := range cfg.Sources.CodePaths {
-		if strings.TrimSpace(rawPath) == "" {
-			continue
-		}
-		if err := ensureOptionalPath(resolveProjectPath(projectRoot, rawPath), fmt.Sprintf("sources.code_paths[%d]", i)); err != nil {
-			return DoctorResult{}, err
-		}
+	if err := ensureOptionalPath(resolveProjectPath(projectRoot, cfg.Sources.NotesFile), "inputs.notes_file"); err != nil {
+		return DoctorResult{}, err
 	}
 
-	for _, spec := range enabledSpecs(cfg) {
+	for _, spec := range existingDocSpecs(projectRoot) {
 		docRoot := filepath.Join(projectRoot, "docs", spec.Folder)
 		if err := ensurePath(filepath.Join(docRoot, "main.typ")); err != nil {
 			return DoctorResult{}, err
@@ -214,59 +277,67 @@ func Doctor() (DoctorResult, error) {
 	return DoctorResult{Messages: messages}, nil
 }
 
-func AIDraft(opts AIDraftOptions) error {
-	if opts.FromDoc != "tz" {
-		return fmt.Errorf("only --from tz is supported in v1")
+func generateConfiguredDrafts(projectRoot string, cfg config.Config, targetDocs []documents.Spec, modelOverride string, apply bool) error {
+	sourceText, err := loadPrimaryTZSource(projectRoot, cfg)
+	if err != nil {
+		return err
 	}
-
-	projectRoot, cfg, err := loadProject()
+	teamSourceText, err := loadTeamTZSource(projectRoot, cfg)
+	if err != nil {
+		return err
+	}
+	projectContext, err := collectCodeContext(projectRoot, cfg)
+	if err != nil {
+		return err
+	}
+	notesText, err := loadNotes(projectRoot, cfg)
 	if err != nil {
 		return err
 	}
 
-	targetDocs, err := resolveExistingDocs(cfg, opts.Doc)
-	if err != nil {
-		return err
+	client := ai.Client{
+		Provider: cfg.AI.Provider,
+		BaseURL:  providerBaseURLFromEnv(cfg),
+		APIKey:   configuredAPIKey(cfg),
+	}
+	model := firstNonEmpty(modelOverride, cfg.AI.DefaultModel)
+	if strings.TrimSpace(model) == "" {
+		return fmt.Errorf("AI model is empty")
+	}
+	if strings.TrimSpace(client.APIKey) == "" {
+		return fmt.Errorf("AI key is empty; fill ai.api_key in term-paper.yaml or set a provider env var")
 	}
 
-	filtered := targetDocs[:0]
 	for _, spec := range targetDocs {
-		if spec.ID == opts.FromDoc {
-			continue
+		fmt.Printf("Preparing %s...\n", spec.ID)
+		if err := generateDocDrafts(context.Background(), client, projectRoot, cfg, spec, model, sourceText, teamSourceTextForDoc(spec, teamSourceText), projectContext, notesText, apply); err != nil {
+			return fmt.Errorf("generate %s draft: %w", spec.ID, err)
 		}
-		filtered = append(filtered, spec)
 	}
-	if len(filtered) == 0 {
-		return fmt.Errorf("no target documents selected after excluding %s", opts.FromDoc)
-	}
-
-	manualPaths := configuredCodePaths(projectRoot, cfg)
-	if opts.ProjectPath != "" {
-		manualPaths = []string{resolveProjectPath(projectRoot, opts.ProjectPath)}
-	}
-	if opts.ProjectArchive != "" {
-		manualPaths = []string{resolveProjectPath(projectRoot, opts.ProjectArchive)}
-	}
-
-	return generateConfiguredDrafts(projectRoot, cfg, filtered, manualPaths, opts.Model, opts.Apply)
+	return nil
 }
 
-func generateDocDrafts(ctx context.Context, client ai.Client, projectRoot string, cfg config.Config, spec documents.Spec, model, sourceText, teamSourceText, projectContext string, apply bool) error {
-	docCfg := cfg.Docs[spec.ID]
+func generateDocDrafts(ctx context.Context, client ai.Client, projectRoot string, cfg config.Config, spec documents.Spec, model, sourceText, teamSourceText, projectContext, notesText string, apply bool) error {
 	for _, section := range spec.Sections {
-		prompt := buildPrompt(cfg, spec, section, sourceText, teamSourceText, projectContext)
+		if !section.Generate || strings.TrimSpace(section.Prompt) == "" {
+			fmt.Printf("Skipping %s/%s: static section\n", spec.ID, section.FileName)
+			continue
+		}
+
+		fmt.Printf("Generating %s/%s...\n", spec.ID, section.FileName)
+		prompt := buildPrompt(cfg, spec, section, sourceText, teamSourceText, projectContext, notesText)
 		content, err := client.Complete(ctx, model, []ai.Message{
 			{
 				Role: "system",
 				Content: strings.Join(append([]string{
 					"Ты помогаешь студенту писать документацию по курсовому проекту в формате Typst.",
-					"Приоритет источников такой: основное ТЗ > командное ТЗ > код и структура проекта > заметки пользователя > стилевые примеры.",
-					"Стилевые примеры можно использовать только как ориентир по тону и структуре. Нельзя переносить из них факты, названия сущностей и готовые абзацы.",
-					"Пиши только на основе фактов из входных материалов.",
-					"Не используй типовые обезличенные формулировки из чужих работ и не делай текст похожим на шаблон из интернета.",
-					"Если информации недостаточно, оставляй локальный TODO и явно отмечай пробел.",
-					"Если в документе нужны изображения, оставляй конкретные плейсхолдеры TODO на скриншоты.",
-					"Верни только Typst-разметку для одного файла секции.",
+					"Главный источник знаний определяется полем inputs.source_priority: tz, code или balanced.",
+					"Используй стилевые примеры только как ориентир по тону и структуре. Нельзя переносить из них факты, названия сущностей и готовые абзацы.",
+					"Верни только текст секции в формате Typst.",
+					"Запрещено писать вводные слова, итоги, пояснения модели, markdown-обёртки и служебные комментарии.",
+					"Не выдумывай факты. Если данных не хватает, оставляй локальный TODO внутри текста секции.",
+					"Не переписывай раздел литературы, названия документов и прочие служебные секции, если в запросе этого нет.",
+					"Стиль должен быть официальным, техническим, понятным студенту и айтишнику, с уникальными формулировками без плагиата.",
 				}, cfg.AI.Policy...), "\n"),
 			},
 			{
@@ -287,164 +358,105 @@ func generateDocDrafts(ctx context.Context, client ai.Client, projectRoot string
 		if err := os.MkdirAll(targetDir, 0o755); err != nil {
 			return err
 		}
-		normalized := ensureTrailingNewline(content)
-		if err := os.WriteFile(targetFile, []byte(normalized), 0o644); err != nil {
+		if err := os.WriteFile(targetFile, []byte(ensureTrailingNewline(strings.TrimSpace(content))), 0o644); err != nil {
 			return err
 		}
-		fmt.Printf("Generated %s (%s)\n", targetFile, docCfg.Title)
-		time.Sleep(200 * time.Millisecond)
+		fmt.Printf("Generated %s\n", targetFile)
 	}
 	return nil
 }
 
-func buildPrompt(cfg config.Config, spec documents.Spec, section documents.SectionSpec, sourceText, teamSourceText, projectContext string) string {
+func buildPrompt(cfg config.Config, spec documents.Spec, section documents.SectionSpec, sourceText, teamSourceText, projectContext, notesText string) string {
 	var b strings.Builder
 	styleExamples := ai.LoadReferenceExamples(cfg.AI.StyleExamples[spec.ID])
 
-	b.WriteString(fmt.Sprintf("Документ: %s\n", spec.Title))
-	b.WriteString(fmt.Sprintf("Секция: %s\n", section.Title))
-	b.WriteString(fmt.Sprintf("Проект: %s\n", cfg.Project.Name))
-	b.WriteString(fmt.Sprintf("Краткое описание: %s\n\n", cfg.Project.Summary))
-	b.WriteString("Задача:\n")
-	b.WriteString("Подготовь один законченный Typst-файл для указанной секции документации по курсовому проекту.\n\n")
-	b.WriteString("Жёсткие правила:\n")
-	b.WriteString("1. Основа текста — факты из основного ТЗ.\n")
-	b.WriteString("2. Код и структура проекта нужны для проверки реализованности и конкретизации формулировок.\n")
-	b.WriteString("3. Если ТЗ и код расходятся, не скрывай это: пиши нейтрально и ставь TODO там, где нужна ручная правка.\n")
-	b.WriteString("4. Нельзя копировать ТЗ дословно большими фрагментами.\n")
-	b.WriteString("5. Нельзя копировать стилевые примеры как готовый текст; примеры — только ориентир по тону и плотности.\n")
-	b.WriteString("6. Нельзя выдумывать экраны, API, модули, алгоритмы, тесты, таблицы и метрики.\n")
-	b.WriteString("7. Если сведений мало, пиши локальный TODO прямо в нужном месте, а не общую фразу в конце.\n")
-	b.WriteString("8. Верни только Typst-разметку для одного файла секции.\n")
-	b.WriteString("9. Начни с корректного заголовка секции.\n")
-	b.WriteString("10. Если нужны изображения, вставляй конкретные TODO вида: TODO: вставить скрин ...\n")
-	b.WriteString("11. Тон документа должен быть серьёзным, техническим и похожим на нормальную учебную документацию по ЕСПД.\n")
-	b.WriteString(fmt.Sprintf("- Цель секции: %s\n\n", section.Prompt))
-	if spec.ID == "pz" {
-		b.WriteString("Это ПЗ. Сделай текст особенно конкретным и устойчивым к проверке на антиплагиат: меньше шаблонных формулировок, больше фактов из проекта и кода.\n\n")
-	}
-	b.WriteString("Рекомендуемый порядок работы:\n")
-	b.WriteString("1. Извлеки факты из ТЗ.\n")
-	b.WriteString("2. Сопоставь факты с кодом и структурой проекта.\n")
-	b.WriteString("3. Сформируй связный текст раздела без воды.\n")
-	b.WriteString("4. Оставь TODO только там, где действительно не хватает информации.\n\n")
-	if len(cfg.Sources.Notes) > 0 {
-		b.WriteString("Дополнительные указания пользователя:\n")
-		for _, note := range cfg.Sources.Notes {
-			b.WriteString("- " + note + "\n")
-		}
-		b.WriteString("\n")
-	}
-	if len(cfg.Sources.Screenshots) > 0 {
-		b.WriteString("Заготовки для обязательных скриншотов:\n")
-		for _, shot := range cfg.Sources.Screenshots {
-			b.WriteString("- " + shot + "\n")
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("Исходное ТЗ:\n")
-	b.WriteString(sourceText)
+	b.WriteString("Задача: подготовь только текст одной секции документа в формате Typst.\n\n")
+	b.WriteString("Документ: " + spec.Title + "\n")
+	b.WriteString("Секция: " + section.Title + "\n")
+	b.WriteString("Проект: " + cfg.Project.Name + "\n")
+	b.WriteString("Название на английском: " + cfg.Project.EnglishName + "\n")
+	b.WriteString("Код проекта: " + cfg.Project.Code + "\n")
+	b.WriteString("Тип проекта: " + cfg.Project.Type + "\n")
+	b.WriteString("Краткое описание: " + cfg.Project.Summary + "\n")
+	b.WriteString("Студент: " + cfg.Participants[0].Name + ", " + cfg.Participants[0].Group + "\n\n")
+
+	b.WriteString("Требования к результату:\n")
+	b.WriteString("1. Верни только итоговый текст секции в формате Typst.\n")
+	b.WriteString("2. Не добавляй вводных слов, не пиши, что ты что-то сгенерировал, не используй markdown.\n")
+	b.WriteString("3. Не выдумывай факты, технологии, интерфейсы, показатели, тесты и экраны, которых нет в ТЗ, коде или заметках.\n")
+	b.WriteString("4. Если для полноценного описания нужны скриншоты, вставляй только TODO вида: TODO: вставить скрин ...\n")
+	b.WriteString("5. Не меняй базовую литературу и не добавляй в секцию служебные заголовки, которых нет в шаблоне.\n")
+	b.WriteString("6. Пиши официально и технически, но без перегруженных сложных фраз.\n")
+	b.WriteString("7. Лучше дать подробное содержательное описание, чем слишком короткий общий текст.\n\n")
+
+	b.WriteString("Что нужно раскрыть в этой секции:\n" + section.Prompt + "\n\n")
+	b.WriteString("Приоритет источников: " + cfg.Sources.SourcePriority + "\n\n")
+
+	b.WriteString("Основное ТЗ:\n" + sourceText + "\n")
 	if teamSourceText != "" {
-		b.WriteString("\n\nКомандное ТЗ:\n")
-		b.WriteString(teamSourceText)
+		b.WriteString("\nКомандное ТЗ:\n" + teamSourceText + "\n")
 	}
-	if projectContext != "" {
-		b.WriteString("\n\nКонтекст проекта:\n")
-		b.WriteString(projectContext)
+	if strings.TrimSpace(projectContext) != "" {
+		b.WriteString("\nКонтекст кода:\n" + projectContext + "\n")
+	}
+	if strings.TrimSpace(notesText) != "" {
+		b.WriteString("\nЗаметки пользователя:\n" + notesText + "\n")
 	}
 	if styleExamples != "" {
-		b.WriteString("\n\nСтилевые примеры из существующих документов пользователя:\n")
-		b.WriteString("Используй их только как ориентир по типу формулировок, структуре и тону. Факты из них брать нельзя.\n")
-		b.WriteString(styleExamples)
+		b.WriteString("\nСтилевые примеры:\n")
+		b.WriteString("Используй их только как ориентир по плотности и тону текста. Переносить факты и готовые фразы нельзя.\n")
+		b.WriteString(styleExamples + "\n")
 	}
+
 	return b.String()
 }
 
-func generateConfiguredDrafts(projectRoot string, cfg config.Config, targetDocs []documents.Spec, codePaths []string, modelOverride string, apply bool) error {
-	sourceText, err := loadPrimaryTZSource(projectRoot, cfg)
-	if err != nil {
-		return err
-	}
-	teamSourceText, err := loadTeamTZSource(projectRoot, cfg)
-	if err != nil {
-		return err
-	}
-	projectContext, err := ai.CollectProjectContexts(codePaths)
-	if err != nil {
-		return err
-	}
-
-	client := ai.Client{
-		Provider: cfg.AI.Provider,
-		BaseURL:  providerBaseURLFromEnv(cfg),
-		APIKey:   firstNonEmpty(os.Getenv(cfg.AI.APIKeyEnv), cfg.AI.APIKey),
-	}
-	model := firstNonEmpty(modelOverride, cfg.AI.DefaultModel)
-	if strings.TrimSpace(model) == "" {
-		return fmt.Errorf("AI model is empty")
-	}
-	if strings.TrimSpace(client.APIKey) == "" {
-		return fmt.Errorf("AI key is empty; set %s or ai.api_key in term-paper.yaml", cfg.AI.APIKeyEnv)
-	}
-
-	for _, spec := range targetDocs {
-		if spec.ID == "tz" {
-			continue
-		}
-		if err := generateDocDrafts(context.Background(), client, projectRoot, cfg, spec, model, sourceText, teamSourceTextForDoc(spec, teamSourceText), projectContext, apply); err != nil {
-			return fmt.Errorf("generate %s draft: %w", spec.ID, err)
-		}
-	}
-	return nil
-}
-
-func generateFromConfiguredSources(projectRoot string, cfg config.Config, selected []documents.Spec, modelOverride string) error {
-	if strings.TrimSpace(cfg.Sources.TZPath) == "" {
-		fmt.Println("Typst project structure updated. Fill sources.tz_path and run `term-paper generate` again for AI drafts.")
-		return nil
-	}
-	apiKey := firstNonEmpty(os.Getenv(cfg.AI.APIKeyEnv), cfg.AI.APIKey)
-	if strings.TrimSpace(apiKey) == "" {
-		fmt.Println("Typst project structure updated. Fill ai.api_key or set the configured environment variable to enable AI drafts.")
-		return nil
-	}
-	if err := generateConfiguredDrafts(projectRoot, cfg, selected, configuredCodePaths(projectRoot, cfg), modelOverride, false); err != nil {
-		return err
-	}
-	fmt.Println("Typst project structure updated and AI drafts generated.")
-	return nil
-}
-
-func enabledSpecs(cfg config.Config) []documents.Spec {
+func existingDocSpecs(projectRoot string) []documents.Spec {
 	var out []documents.Spec
 	for _, spec := range documents.All() {
-		if cfg.Docs[spec.ID].Enabled {
+		if _, err := os.Stat(filepath.Join(projectRoot, "docs", spec.Folder, "main.typ")); err == nil {
 			out = append(out, spec)
 		}
 	}
 	return out
 }
 
-func resolveExistingDocs(cfg config.Config, docArg string) ([]documents.Spec, error) {
+func resolveExistingDocs(projectRoot string, cfg config.Config, docArg string) ([]documents.Spec, error) {
 	if docArg == "" || docArg == "all" {
-		return enabledSpecs(cfg), nil
+		specs := existingDocSpecs(projectRoot)
+		if len(specs) == 0 {
+			return nil, fmt.Errorf("no generated documents found; run `term-paper generate-doc --doc <...>` first")
+		}
+		return specs, nil
 	}
-	specs, err := documents.ResolveSelection(docArg, cfg.Project.Mode)
+
+	specs, err := documents.ResolveSelection(docArg)
 	if err != nil {
 		return nil, err
 	}
-	filtered := specs[:0]
 	for _, spec := range specs {
-		docCfg, ok := cfg.Docs[spec.ID]
-		if !ok {
-			continue
+		if _, err := os.Stat(filepath.Join(projectRoot, "docs", spec.Folder, "main.typ")); err != nil {
+			return nil, fmt.Errorf("document %s was not created yet; run `term-paper generate-doc --doc %s` first", spec.ID, spec.ID)
 		}
-		if !docCfg.Enabled {
-			return nil, fmt.Errorf("document %s is not enabled in this project", spec.ID)
-		}
-		filtered = append(filtered, spec)
 	}
-	return filtered, nil
+	return specs, nil
+}
+
+func selectSingleDoc(docArg string) ([]documents.Spec, error) {
+	if strings.TrimSpace(docArg) == "" || docArg == "all" {
+		return nil, fmt.Errorf("use one document id: pz, pmi, ro or pmi-team")
+	}
+	specs, err := documents.ResolveSelection(docArg)
+	if err != nil {
+		return nil, err
+	}
+	if len(specs) != 1 {
+		return nil, fmt.Errorf("exactly one document is required")
+	}
+	if specs[0].ID == "tz" {
+		return nil, fmt.Errorf("direct generation for tz is not supported")
+	}
+	return specs, nil
 }
 
 func loadProject() (string, config.Config, error) {
@@ -478,25 +490,6 @@ func loadProjectFromOutput(output string) (string, config.Config, error) {
 	return "", config.Config{}, fmt.Errorf("could not find %s in %s; run `term-paper init --output %s` first", config.FileName, projectRoot, projectRoot)
 }
 
-func selectDocsForGeneration(cfg config.Config, docArg string) ([]documents.Spec, error) {
-	if docArg == "" || docArg == "all" {
-		return enabledSpecs(cfg), nil
-	}
-	specs, err := documents.ResolveSelection(docArg, cfg.Project.Mode)
-	if err != nil {
-		return nil, err
-	}
-	var selected []documents.Spec
-	for _, spec := range specs {
-		docCfg, ok := cfg.Docs[spec.ID]
-		if !ok || !docCfg.Enabled {
-			return nil, fmt.Errorf("document %s is not enabled in term-paper.yaml", spec.ID)
-		}
-		selected = append(selected, spec)
-	}
-	return selected, nil
-}
-
 func ensurePath(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("missing %s", path)
@@ -511,69 +504,48 @@ func ensureOptionalPath(path, field string) error {
 	return nil
 }
 
-func readSections(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", err
-	}
-	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".typ") {
-			continue
-		}
-		names = append(names, entry.Name())
-	}
-	slices.Sort(names)
-
-	var b strings.Builder
-	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return "", err
-		}
-		b.WriteString("\n\n# File: " + name + "\n")
-		b.Write(data)
-	}
-	return strings.TrimSpace(b.String()), nil
-}
-
 func loadPrimaryTZSource(projectRoot string, cfg config.Config) (string, error) {
-	if strings.TrimSpace(cfg.Sources.TZPath) != "" {
-		path := resolveProjectPath(projectRoot, cfg.Sources.TZPath)
-		text, err := ai.LoadSourceText(path)
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(text) != "" {
-			return text, nil
-		}
-	}
-	return readSections(filepath.Join(projectRoot, "docs", "tz", "sections"))
+	return typst.BundleSource(resolveProjectPath(projectRoot, cfg.Sources.TZDir), "main.typ")
 }
 
 func loadTeamTZSource(projectRoot string, cfg config.Config) (string, error) {
-	if strings.TrimSpace(cfg.Sources.TeamTZPath) == "" {
-		return "", nil
-	}
-	path := resolveProjectPath(projectRoot, cfg.Sources.TeamTZPath)
+	path := resolveProjectPath(projectRoot, cfg.Sources.TeamTZDir)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
 		}
 		return "", err
 	}
-	return ai.LoadSourceText(path)
+	return typst.BundleSource(path, "main.typ")
 }
 
-func configuredCodePaths(projectRoot string, cfg config.Config) []string {
-	paths := make([]string, 0, len(cfg.Sources.CodePaths))
-	for _, raw := range cfg.Sources.CodePaths {
-		if strings.TrimSpace(raw) == "" {
+func collectCodeContext(projectRoot string, cfg config.Config) (string, error) {
+	codeDir := resolveProjectPath(projectRoot, cfg.Sources.CodeDir)
+	entries, err := os.ReadDir(codeDir)
+	if err != nil {
+		return "", err
+	}
+	var paths []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		paths = append(paths, resolveProjectPath(projectRoot, raw))
+		paths = append(paths, filepath.Join(codeDir, entry.Name()))
 	}
-	return paths
+	sort.Strings(paths)
+	return ai.CollectProjectContexts(paths)
+}
+
+func loadNotes(projectRoot string, cfg config.Config) (string, error) {
+	path := resolveProjectPath(projectRoot, cfg.Sources.NotesFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 func resolveProjectPath(projectRoot, path string) string {
@@ -588,6 +560,17 @@ func teamSourceTextForDoc(spec documents.Spec, teamSourceText string) string {
 		return teamSourceText
 	}
 	return ""
+}
+
+func configuredAPIKey(cfg config.Config) string {
+	switch strings.ToLower(strings.TrimSpace(cfg.AI.Provider)) {
+	case "openai":
+		return firstNonEmpty(os.Getenv("OPENAI_API_KEY"), cfg.AI.APIKey)
+	case "anthropic":
+		return firstNonEmpty(os.Getenv("ANTHROPIC_API_KEY"), cfg.AI.APIKey)
+	default:
+		return firstNonEmpty(os.Getenv("OPENROUTER_API_KEY"), cfg.AI.APIKey)
+	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -636,4 +619,11 @@ func writeDefaultInputFile(path, content string) error {
 		return nil
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func projectContextOrStub(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return "Контекст кода отсутствует."
+	}
+	return text
 }
