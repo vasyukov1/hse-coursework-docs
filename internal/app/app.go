@@ -29,6 +29,7 @@ type GenerateDocOptions struct {
 	Doc    string
 	Output string
 	Apply  bool
+	Draft  bool
 	SkipAI bool
 }
 
@@ -124,7 +125,7 @@ func GenerateDoc(opts GenerateDocOptions) error {
 		return nil
 	}
 
-	return generateConfiguredDrafts(projectRoot, cfg, selected, cfg.AI.DefaultModel, opts.Apply)
+	return generateConfiguredDrafts(projectRoot, cfg, selected, cfg.AI.DefaultModel, !opts.Draft)
 }
 
 func ImproveDoc(opts ImproveDocOptions) error {
@@ -169,10 +170,13 @@ func ImproveDoc(opts ImproveDocOptions) error {
 
 	fmt.Printf("Improving %s...\n", targetFile)
 	prompt := strings.Join([]string{
-		"Улучши существующий Typst-файл документации.",
+		"Улучши существующий Typst-файл курсовой документации НИУ ВШЭ.",
 		"Верни только итоговый текст файла в формате Typst.",
 		"Не добавляй пояснений, markdown-обёрток, вводных слов и комментариев вне текста документа.",
-		"Сохрани официальный технический стиль, не выдумывай факты и не меняй базовую структуру без необходимости.",
+		"Сохрани все существующие #import, #include, заголовки и порядок разделов, если пользователь явно не попросил изменить структуру.",
+		"Сохрани официальный стиль ЕСПД: плотный технический текст, проверяемые формулировки, без рекламного тона и разговорных оборотов.",
+		"Заполняй раздел максимально подробно по ТЗ, коду и заметкам. Лучше оставить лишние редактируемые абзацы, чем короткий общий текст.",
+		"Не выдумывай факты, версии, экраны, интеграции и метрики. Если данных не хватает, оставляй локальный TODO в нужном месте.",
 		"Запрос пользователя: " + opts.Prompt,
 		"\nТекущий текст файла:\n" + string(current),
 		"\nОсновное ТЗ:\n" + primaryTZ,
@@ -181,7 +185,7 @@ func ImproveDoc(opts ImproveDocOptions) error {
 	}, "\n\n")
 
 	out, err := client.Complete(context.Background(), cfg.AI.DefaultModel, []ai.Message{
-		{Role: "system", Content: "Верни только итоговый Typst-текст файла без пояснений."},
+		{Role: "system", Content: "Верни только итоговый Typst-текст файла без пояснений. Структуру, заголовки и служебные импорты сохраняй как обязательный контракт."},
 		{Role: "user", Content: prompt},
 	})
 	if err != nil {
@@ -325,19 +329,26 @@ func generateDocDrafts(ctx context.Context, client ai.Client, projectRoot string
 		}
 
 		fmt.Printf("Generating %s/%s...\n", spec.ID, section.FileName)
-		prompt := buildPrompt(cfg, spec, section, sourceText, teamSourceText, projectContext, notesText)
+		targetFile := filepath.Join(projectRoot, "docs", spec.Folder, "sections", section.FileName)
+		sectionTemplate, err := os.ReadFile(targetFile)
+		if err != nil {
+			return err
+		}
+		prompt := buildPrompt(cfg, spec, section, string(sectionTemplate), sourceText, teamSourceText, projectContext, notesText)
 		content, err := client.Complete(ctx, model, []ai.Message{
 			{
 				Role: "system",
 				Content: strings.Join(append([]string{
-					"Ты помогаешь студенту писать документацию по курсовому проекту в формате Typst.",
+					"Ты пишешь курсовую программную документацию НИУ ВШЭ в формате Typst по ЕСПД.",
 					"Главный источник знаний определяется полем inputs.source_priority: tz, code или balanced.",
-					"Используй стилевые примеры только как ориентир по тону и структуре. Нельзя переносить из них факты, названия сущностей и готовые абзацы.",
-					"Верни только текст секции в формате Typst.",
-					"Запрещено писать вводные слова, итоги, пояснения модели, markdown-обёртки и служебные комментарии.",
+					"Текущий шаблон секции является обязательным контрактом: сохрани #import, верхний заголовок, все подзаголовки и их порядок.",
+					"Можно заменять TODO на содержательный текст и добавлять дополнительные абзацы, списки, таблицы и подпункты ниже существующих заголовков.",
+					"Нельзя удалять обязательные пункты шаблона, переименовывать разделы, менять стиль документа или добавлять markdown-обёртки.",
+					"Используй стилевые примеры только как ориентир по плотности, тону и структуре. Нельзя переносить из них факты, названия сущностей и готовые абзацы.",
+					"Верни только итоговый Typst-текст секции без пояснений модели.",
 					"Не выдумывай факты. Если данных не хватает, оставляй локальный TODO внутри текста секции.",
-					"Не переписывай раздел литературы, названия документов и прочие служебные секции, если в запросе этого нет.",
-					"Стиль должен быть официальным, техническим, понятным студенту и айтишнику, с уникальными формулировками без плагиата.",
+					"Генерируй подробный материал: проще удалить лишние корректные абзацы, чем дописывать пустой раздел с нуля.",
+					"Стиль должен быть официальным, техническим, проверяемым и уникальным, без плагиата и разговорных формулировок.",
 				}, cfg.AI.Policy...), "\n"),
 			},
 			{
@@ -349,10 +360,9 @@ func generateDocDrafts(ctx context.Context, client ai.Client, projectRoot string
 			return err
 		}
 
-		targetDir := filepath.Join(projectRoot, "docs", spec.Folder, "drafts")
-		targetFile := filepath.Join(targetDir, section.FileName)
-		if apply {
-			targetDir = filepath.Join(projectRoot, "docs", spec.Folder, "sections")
+		targetDir := filepath.Join(projectRoot, "docs", spec.Folder, "sections")
+		if !apply {
+			targetDir = filepath.Join(projectRoot, "docs", spec.Folder, "drafts")
 			targetFile = filepath.Join(targetDir, section.FileName)
 		}
 		if err := os.MkdirAll(targetDir, 0o755); err != nil {
@@ -366,11 +376,11 @@ func generateDocDrafts(ctx context.Context, client ai.Client, projectRoot string
 	return nil
 }
 
-func buildPrompt(cfg config.Config, spec documents.Spec, section documents.SectionSpec, sourceText, teamSourceText, projectContext, notesText string) string {
+func buildPrompt(cfg config.Config, spec documents.Spec, section documents.SectionSpec, sectionTemplate, sourceText, teamSourceText, projectContext, notesText string) string {
 	var b strings.Builder
 	styleExamples := ai.LoadReferenceExamples(cfg.AI.StyleExamples[spec.ID])
 
-	b.WriteString("Задача: подготовь только текст одной секции документа в формате Typst.\n\n")
+	b.WriteString("Задача: подготовь итоговый текст одной секции документа в формате Typst.\n\n")
 	b.WriteString("Документ: " + spec.Title + "\n")
 	b.WriteString("Секция: " + section.Title + "\n")
 	b.WriteString("Проект: " + cfg.Project.Name + "\n")
@@ -380,14 +390,20 @@ func buildPrompt(cfg config.Config, spec documents.Spec, section documents.Secti
 	b.WriteString("Краткое описание: " + cfg.Project.Summary + "\n")
 	b.WriteString("Студент: " + cfg.Participants[0].Name + ", " + cfg.Participants[0].Group + "\n\n")
 
+	b.WriteString("Обязательный шаблон секции:\n")
+	b.WriteString(sectionTemplate + "\n\n")
+
 	b.WriteString("Требования к результату:\n")
 	b.WriteString("1. Верни только итоговый текст секции в формате Typst.\n")
-	b.WriteString("2. Не добавляй вводных слов, не пиши, что ты что-то сгенерировал, не используй markdown.\n")
-	b.WriteString("3. Не выдумывай факты, технологии, интерфейсы, показатели, тесты и экраны, которых нет в ТЗ, коде или заметках.\n")
-	b.WriteString("4. Если для полноценного описания нужны скриншоты, вставляй только TODO вида: TODO: вставить скрин ...\n")
-	b.WriteString("5. Не меняй базовую литературу и не добавляй в секцию служебные заголовки, которых нет в шаблоне.\n")
-	b.WriteString("6. Пиши официально и технически, но без перегруженных сложных фраз.\n")
-	b.WriteString("7. Лучше дать подробное содержательное описание, чем слишком короткий общий текст.\n\n")
+	b.WriteString("2. Сохрани все #import, верхний заголовок, подзаголовки и порядок пунктов из обязательного шаблона секции.\n")
+	b.WriteString("3. Заполняй TODO и пустые места содержательным текстом, но не удаляй обязательные пункты шаблона.\n")
+	b.WriteString("4. Не добавляй вводных слов, не пиши, что ты что-то сгенерировал, не используй markdown.\n")
+	b.WriteString("5. Не выдумывай факты, технологии, интерфейсы, показатели, тесты и экраны, которых нет в ТЗ, коде или заметках.\n")
+	b.WriteString("6. Если для полноценного описания нужны скриншоты, вставляй только TODO вида: TODO: вставить скрин ...\n")
+	b.WriteString("7. Раздел литературы и служебные списки ГОСТ оставляй без изменений, если генерируемая секция не требует проектной адаптации.\n")
+	b.WriteString("8. Пиши официально и технически, но без перегруженных сложных фраз.\n")
+	b.WriteString("9. Делай текст подробным: раскрывай назначения, ограничения, входные и выходные данные, критерии проверки, ошибки и пользовательские сценарии, когда это применимо.\n")
+	b.WriteString("10. Для крупных функциональных разделов добавляй проектно-специфичные подпункты третьего уровня, если это не ломает обязательную структуру.\n\n")
 
 	b.WriteString("Что нужно раскрыть в этой секции:\n" + section.Prompt + "\n\n")
 	b.WriteString("Приоритет источников: " + cfg.Sources.SourcePriority + "\n\n")

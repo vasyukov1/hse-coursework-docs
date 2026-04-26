@@ -84,7 +84,7 @@ func (c Client) completeOpenAICompatible(ctx context.Context, model string, mess
 	body, err := json.Marshal(openAIChatRequest{
 		Model:     model,
 		Messages:  messages,
-		MaxTokens: 3500,
+		MaxTokens: 9000,
 		Metadata: map[string]string{
 			"tool": "term-paper",
 		},
@@ -135,7 +135,7 @@ func (c Client) completeAnthropic(ctx context.Context, model string, messages []
 
 	body, err := json.Marshal(anthropicRequest{
 		Model:     model,
-		MaxTokens: 3500,
+		MaxTokens: 9000,
 		System:    systemPrompt,
 		Messages:  anthropicMessages,
 	})
@@ -238,12 +238,12 @@ func LoadReferenceExamples(urls []string) string {
 		if err != nil {
 			continue
 		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 12000))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 24000))
 		_ = resp.Body.Close()
 		if err != nil || resp.StatusCode >= 300 {
 			continue
 		}
-		blocks = append(blocks, fmt.Sprintf("# Reference example: %s\n%s", url, truncate(string(body), 8000)))
+		blocks = append(blocks, fmt.Sprintf("# Reference example: %s\n%s", url, truncate(string(body), 16000)))
 	}
 	return strings.Join(blocks, "\n\n")
 }
@@ -372,13 +372,13 @@ func collectFromDir(root string) (string, error) {
 	sort.Strings(files)
 
 	var sections []string
-	sections = append(sections, "## Project files\n"+strings.Join(limitStrings(files, 250), "\n"))
+	sections = append(sections, "## Project files\n"+strings.Join(limitStrings(files, 500), "\n"))
 	for _, file := range pickImportantFiles(files) {
 		data, err := os.ReadFile(filepath.Join(root, file))
 		if err != nil {
 			continue
 		}
-		sections = append(sections, fmt.Sprintf("## %s\n%s", file, truncate(string(data), 5000)))
+		sections = append(sections, fmt.Sprintf("## %s\n%s", file, truncate(string(data), 8000)))
 	}
 	return strings.Join(sections, "\n\n"), nil
 }
@@ -402,7 +402,7 @@ func collectFromZip(zipPath string) (string, error) {
 			if err != nil {
 				continue
 			}
-			data, _ := io.ReadAll(io.LimitReader(rc, 5000))
+			data, _ := io.ReadAll(io.LimitReader(rc, 8000))
 			_ = rc.Close()
 			content[file.Name] = string(data)
 		}
@@ -410,10 +410,10 @@ func collectFromZip(zipPath string) (string, error) {
 	sort.Strings(files)
 
 	var sections []string
-	sections = append(sections, "## Project files\n"+strings.Join(limitStrings(files, 250), "\n"))
+	sections = append(sections, "## Project files\n"+strings.Join(limitStrings(files, 500), "\n"))
 	for _, file := range pickImportantFiles(files) {
 		if text, ok := content[file]; ok {
-			sections = append(sections, fmt.Sprintf("## %s\n%s", file, truncate(text, 5000)))
+			sections = append(sections, fmt.Sprintf("## %s\n%s", file, truncate(text, 8000)))
 		}
 	}
 	return strings.Join(sections, "\n\n"), nil
@@ -425,7 +425,7 @@ func pickImportantFiles(files []string) []string {
 		if isImportantFile(file) {
 			picked = append(picked, file)
 		}
-		if len(picked) >= 12 {
+		if len(picked) >= 24 {
 			break
 		}
 	}

@@ -33,7 +33,7 @@ func TestGenerateDocSubset(t *testing.T) {
 	}
 }
 
-func TestGenerateDocWritesDraftFiles(t *testing.T) {
+func TestGenerateDocWritesSectionFiles(t *testing.T) {
 	root := t.TempDir()
 	initProject(t, root)
 
@@ -99,11 +99,79 @@ func TestGenerateDocWritesDraftFiles(t *testing.T) {
 		t.Fatalf("GenerateDoc() error = %v", err)
 	}
 
+	currentSection, err := os.ReadFile(filepath.Join(root, "docs", "pz", "sections", "02-requirements.typ"))
+	if err != nil {
+		t.Fatalf("expected generated section: %v", err)
+	}
+	if !strings.Contains(string(currentSection), "Сгенерированный текст") {
+		t.Fatalf("unexpected section content: %s", string(currentSection))
+	}
+
+	if string(currentSection) == string(originalSection) {
+		t.Fatalf("expected working section file to be updated by default")
+	}
+}
+
+func TestGenerateDocCanWriteDraftFiles(t *testing.T) {
+	root := t.TempDir()
+	initProject(t, root)
+
+	if err := GenerateDoc(GenerateDocOptions{
+		Doc:    "pz",
+		Output: root,
+		SkipAI: true,
+	}); err != nil {
+		t.Fatalf("GenerateDoc() error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "== Черновой текст\n\nTODO: Уточнить детали проекта.\n",
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.AI.APIKey = "test-key"
+	cfg.AI.Provider = "openrouter"
+	cfg.AI.BaseURL = server.URL
+	cfg.AI.StyleExamples = map[string][]string{}
+	if err := config.Save(root, cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	restore := chdir(t, root)
+	defer restore()
+
+	originalSection, err := os.ReadFile(filepath.Join(root, "docs", "pz", "sections", "02-requirements.typ"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := GenerateDoc(GenerateDocOptions{
+		Doc:    "pz",
+		Output: root,
+		Draft:  true,
+	}); err != nil {
+		t.Fatalf("GenerateDoc() error = %v", err)
+	}
+
 	draft, err := os.ReadFile(filepath.Join(root, "docs", "pz", "drafts", "02-requirements.typ"))
 	if err != nil {
 		t.Fatalf("expected generated draft: %v", err)
 	}
-	if !strings.Contains(string(draft), "Сгенерированный текст") {
+	if !strings.Contains(string(draft), "Черновой текст") {
 		t.Fatalf("unexpected draft content: %s", string(draft))
 	}
 
@@ -112,7 +180,7 @@ func TestGenerateDocWritesDraftFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(currentSection) != string(originalSection) {
-		t.Fatalf("expected working section file to stay unchanged without --apply")
+		t.Fatalf("expected working section file to stay unchanged in draft mode")
 	}
 }
 

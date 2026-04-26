@@ -70,7 +70,8 @@ func runGenerateDoc(args []string) error {
 
 	doc := fs.String("doc", "", "Document to generate: pz|pmi|ro|pmi-team")
 	output := fs.String("output", ".", "Project directory with term-paper.yaml")
-	apply := fs.Bool("apply", false, "Write generated text directly into docs/<doc>/sections instead of docs/<doc>/drafts")
+	apply := fs.Bool("apply", true, "Write generated text directly into docs/<doc>/sections")
+	draft := fs.Bool("draft", false, "Write generated text into docs/<doc>/drafts instead of sections")
 	skipAI := fs.Bool("skip-ai", false, "Only create the Typst document skeleton without AI generation")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -83,6 +84,7 @@ func runGenerateDoc(args []string) error {
 		Doc:    *doc,
 		Output: *output,
 		Apply:  *apply,
+		Draft:  *draft,
 		SkipAI: *skipAI,
 	})
 }
@@ -183,12 +185,12 @@ term-paper
   2. заполнить term-paper.yaml
   3. положить ТЗ в input/tz, код в input/code, заметки в input/notes.txt
   4. term-paper generate-doc --doc pz
-  5. проверить drafts/ или sections/
+  5. проверить docs/<doc>/sections
   6. term-paper create-pdf --doc pz
 
 Команды:
   term-paper init [--output <dir>]
-  term-paper generate-doc --doc <pz|pmi|ro|pmi-team> [--output <dir>] [--apply] [--skip-ai]
+  term-paper generate-doc --doc <pz|pmi|ro|pmi-team> [--output <dir>] [--draft] [--skip-ai]
   term-paper create-pdf [--doc all|tz|pz|pmi|ro|pmi-team] [--output build] [--watch]
   term-paper bundle-typst --input <file-or-dir> --output <file.typ> [--entry main.typ]
   term-paper improve-doc --file <path.typ> --prompt "<что улучшить>" [--apply]
@@ -225,8 +227,8 @@ term-paper generate-doc
   - создаёт Typst-шаблон выбранного документа
   - читает ТЗ, код и заметки
   - генерирует только один документ за запуск
-  - сохраняет результат в docs/<doc>/drafts
-  - с --apply пишет сразу в docs/<doc>/sections
+  - сохраняет результат в docs/<doc>/sections
+  - с --draft пишет черновик в docs/<doc>/drafts
 
 Документы:
   pz        пояснительная записка
@@ -236,7 +238,8 @@ term-paper generate-doc
 
 Примеры:
   term-paper generate-doc --doc pz
-  term-paper generate-doc --doc pmi --apply
+  term-paper generate-doc --doc pmi
+  term-paper generate-doc --doc pz --draft
   term-paper generate-doc --doc ro --skip-ai
 `))
 	case "create-pdf":

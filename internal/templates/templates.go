@@ -75,7 +75,7 @@ func writeRootFiles(root string) error {
 4. Положите архивы кода или каталоги репозиториев в ` + "`input/code`" + `.
 5. Допишите заметки в ` + "`input/notes.txt`" + `.
 6. Запустите ` + "`term-paper generate-doc --doc pz`" + ` или другую нужную команду.
-7. Проверьте ` + "`docs/<doc>/drafts`" + ` или ` + "`docs/<doc>/sections`" + `.
+7. Проверьте ` + "`docs/<doc>/sections`" + `.
 8. Соберите PDF командой ` + "`term-paper create-pdf --doc <doc>`" + `.
 `)
 	if err := writeIfMissing(filepath.Join(root, "README.md"), []byte(readme+"\n")); err != nil {
