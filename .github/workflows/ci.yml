@@ -64,5 +64,5 @@ jobs:
             end
           end
           EOF
-          brew install --build-from-source /tmp/term-paper.rb
-          brew test term-paper
+          brew install --build-from-source local/term-paper/term-paper
+          brew test local/term-paper/term-paper
