@@ -362,10 +362,10 @@ func Validate(cfg Config) error {
 		problems = append(problems, "ai.provider is required")
 	}
 	switch cfg.AI.Provider {
-	case "openrouter", "openai", "anthropic":
+	case "openrouter", "openai", "anthropic", "google", "gemini":
 	case "":
 	default:
-		problems = append(problems, "ai.provider must be openrouter, openai or anthropic")
+		problems = append(problems, "ai.provider must be openrouter, openai, anthropic, google or gemini")
 	}
 	if strings.TrimSpace(cfg.AI.BaseURL) == "" {
 		problems = append(problems, "ai.base_url is required")

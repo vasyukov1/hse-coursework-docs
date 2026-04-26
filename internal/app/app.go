@@ -584,6 +584,8 @@ func configuredAPIKey(cfg config.Config) string {
 		return firstNonEmpty(os.Getenv("OPENAI_API_KEY"), cfg.AI.APIKey)
 	case "anthropic":
 		return firstNonEmpty(os.Getenv("ANTHROPIC_API_KEY"), cfg.AI.APIKey)
+	case "google", "gemini":
+		return firstNonEmpty(os.Getenv("GOOGLE_API_KEY"), cfg.AI.APIKey)
 	default:
 		return firstNonEmpty(os.Getenv("OPENROUTER_API_KEY"), cfg.AI.APIKey)
 	}
@@ -607,6 +609,8 @@ func providerBaseURL(cfg config.Config) string {
 		return "https://api.openai.com/v1"
 	case "anthropic":
 		return "https://api.anthropic.com/v1"
+	case "google", "gemini":
+		return "https://generativelanguage.googleapis.com/v1beta"
 	default:
 		return "https://openrouter.ai/api/v1"
 	}
@@ -618,6 +622,8 @@ func providerBaseURLFromEnv(cfg config.Config) string {
 		return firstNonEmpty(os.Getenv("OPENAI_BASE_URL"), providerBaseURL(cfg))
 	case "anthropic":
 		return firstNonEmpty(os.Getenv("ANTHROPIC_BASE_URL"), providerBaseURL(cfg))
+	case "google", "gemini":
+		return firstNonEmpty(os.Getenv("GOOGLE_BASE_URL"), providerBaseURL(cfg))
 	default:
 		return firstNonEmpty(os.Getenv("OPENROUTER_BASE_URL"), providerBaseURL(cfg))
 	}

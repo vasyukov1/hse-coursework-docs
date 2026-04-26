@@ -59,6 +59,31 @@ type anthropicResponse struct {
 	} `json:"content"`
 }
 
+type geminiRequest struct {
+	Contents          []geminiContent        `json:"contents"`
+	SystemInstruction *geminiContent         `json:"systemInstruction,omitempty"`
+	GenerationConfig  geminiGenerationConfig `json:"generationConfig,omitempty"`
+}
+
+type geminiGenerationConfig struct {
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+}
+
+type geminiContent struct {
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts"`
+}
+
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiResponse struct {
+	Candidates []struct {
+		Content geminiContent `json:"content"`
+	} `json:"candidates"`
+}
+
 func (c Client) Complete(ctx context.Context, model string, messages []Message) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(c.Provider)) {
 	case "", "openrouter":
@@ -67,6 +92,8 @@ func (c Client) Complete(ctx context.Context, model string, messages []Message) 
 		return c.completeOpenAICompatible(ctx, model, messages, false)
 	case "anthropic":
 		return c.completeAnthropic(ctx, model, messages)
+	case "google", "gemini":
+		return c.completeGemini(ctx, model, messages)
 	default:
 		return "", fmt.Errorf("unsupported AI provider %q", c.Provider)
 	}
@@ -174,6 +201,77 @@ func (c Client) completeAnthropic(ctx context.Context, model string, messages []
 	if len(parts) == 0 {
 		return "", fmt.Errorf("anthropic response contains no text blocks")
 	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), nil
+}
+
+func (c Client) completeGemini(ctx context.Context, model string, messages []Message) (string, error) {
+	if c.BaseURL == "" {
+		return "", fmt.Errorf("AI base URL is empty")
+	}
+	if c.APIKey == "" {
+		return "", fmt.Errorf("AI API key is empty")
+	}
+
+	systemPrompt, contents := toGeminiMessages(messages)
+	if len(contents) == 0 {
+		return "", fmt.Errorf("gemini request requires at least one non-system message")
+	}
+
+	reqBody := geminiRequest{
+		Contents: contents,
+		GenerationConfig: geminiGenerationConfig{
+			MaxOutputTokens: 9000,
+		},
+	}
+
+	if strings.TrimSpace(systemPrompt) != "" {
+		reqBody.SystemInstruction = &geminiContent{
+			Role:  "user",
+			Parts: []geminiPart{{Text: systemPrompt}},
+		}
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/models/%s:generateContent?key=%s",
+		strings.TrimRight(c.BaseURL, "/"),
+		model,
+		c.APIKey,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	respBody, err := doRequest(c.httpClient(), req)
+	if err != nil {
+		return "", err
+	}
+
+	var parsed geminiResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", err
+	}
+	if len(parsed.Candidates) == 0 {
+		return "", fmt.Errorf("gemini response contains no candidates")
+	}
+
+	var parts []string
+	for _, part := range parsed.Candidates[0].Content.Parts {
+		if strings.TrimSpace(part.Text) != "" {
+			parts = append(parts, part.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("gemini response contains no text parts")
+	}
+
 	return strings.TrimSpace(strings.Join(parts, "\n\n")), nil
 }
 
@@ -470,4 +568,33 @@ func limitStrings(items []string, limit int) []string {
 		return items
 	}
 	return append(items[:limit], fmt.Sprintf("... and %d more files", len(items)-limit))
+}
+
+func toGeminiMessages(messages []Message) (string, []geminiContent) {
+	var systemParts []string
+	var contents []geminiContent
+
+	for _, message := range messages {
+		text := strings.TrimSpace(message.Content)
+		if text == "" {
+			continue
+		}
+
+		switch message.Role {
+		case "system":
+			systemParts = append(systemParts, text)
+		case "assistant":
+			contents = append(contents, geminiContent{
+				Role:  "model",
+				Parts: []geminiPart{{Text: text}},
+			})
+		default:
+			contents = append(contents, geminiContent{
+				Role:  "user",
+				Parts: []geminiPart{{Text: text}},
+			})
+		}
+	}
+
+	return strings.Join(systemParts, "\n\n"), contents
 }
