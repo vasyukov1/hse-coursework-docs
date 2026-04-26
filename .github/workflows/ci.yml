@@ -40,15 +40,22 @@ jobs:
           HOMEBREW_NO_INSTALL_FROM_API: 1
         run: |
           cd "$GITHUB_WORKSPACE"
-          tar -czf /tmp/term-paper-0.2.0.tgz .
-          SHA="$(shasum -a 256 /tmp/term-paper-0.2.0.tgz | awk '{print $1}')"
-          cat >/tmp/term-paper.rb <<EOF
+
+          VERSION="0.2.0"
+          tar -czf "/tmp/term-paper-${VERSION}.tgz" .
+          SHA="$(shasum -a 256 "/tmp/term-paper-${VERSION}.tgz" | awk '{print $1}')"
+
+          brew tap-new local/term-paper
+
+          FORMULA_DIR="$(brew --repository local/term-paper)/Formula"
+
+          cat >"$FORMULA_DIR/term-paper.rb" <<EOF
           class TermPaper < Formula
             desc "Typst-based coursework documentation generator and PDF builder"
             homepage "https://github.com/${{ github.repository }}"
-            url "file:///tmp/term-paper-0.2.0.tgz"
+            url "file:///tmp/term-paper-${VERSION}.tgz"
             sha256 "${SHA}"
-            version "0.2.0"
+            version "${VERSION}"
             license "MIT"
 
             depends_on "go" => :build
@@ -65,5 +72,6 @@ jobs:
             end
           end
           EOF
+
           brew install --build-from-source local/term-paper/term-paper
           brew test local/term-paper/term-paper
