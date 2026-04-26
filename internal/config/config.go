@@ -169,6 +169,8 @@ func Default(mode string, selected []documents.Spec) Config {
 				"Если фактов недостаточно, вставляй TODO вместо выдумывания.",
 				"Если в документе нужны иллюстрации, пиши явные TODO в формате: TODO: вставить скрин ...",
 				"Сохраняй структуру разделов и пиши в формате Typst.",
+				"Не изменяй текст, который дан как базовый, например, названия используемой литературы",
+				"Шаблон заполнения можешь найти по ссылке: https://github.com/vasyukov1/HSE-FCS-SE-2-year/blob/main/Term-Paper",
 			},
 			StyleExamples: map[string][]string{
 				"tz": {
