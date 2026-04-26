@@ -40,14 +40,15 @@ jobs:
           HOMEBREW_NO_INSTALL_FROM_API: 1
         run: |
           cd "$GITHUB_WORKSPACE"
-          tar -czf /tmp/term-paper.tgz .
-          SHA="$(shasum -a 256 /tmp/term-paper.tgz | awk '{print $1}')"
+          tar -czf /tmp/term-paper-0.2.0.tgz .
+          SHA="$(shasum -a 256 /tmp/term-paper-0.2.0.tgz | awk '{print $1}')"
           cat >/tmp/term-paper.rb <<EOF
           class TermPaper < Formula
             desc "Typst-based coursework documentation generator and PDF builder"
             homepage "https://github.com/${{ github.repository }}"
-            url "file:///tmp/term-paper.tgz"
+            url "file:///tmp/term-paper-0.2.0.tgz"
             sha256 "${SHA}"
+            version "0.2.0"
             license "MIT"
 
             depends_on "go" => :build
